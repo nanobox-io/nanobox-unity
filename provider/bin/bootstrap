@@ -1,0 +1,236 @@
+#!/usr/bin/env python
+
+import click
+import collections
+import os
+import yaml
+
+adapters = {}
+for fn in os.listdir(os.path.join(os.path.dirname(__file__), '../adapters')):
+    if fn.endswith('.py'):
+        short = fn[:-3]
+        fn = os.path.join(os.path.dirname(__file__), '../adapters', fn)
+        with open(fn) as f:
+            adapters[short] = {}
+            code = compile(f.read(), fn, 'exec')
+            eval(code, adapters[short], adapters[short])
+
+
+@click.command(context_settings=dict(help_option_names=['-h', '--help']))
+@click.option('-p', '--adapter', type=click.Choice(adapters.keys()),
+              prompt=True, envvar='NANOBOX_ADAPTER',
+              help='The adapter for the provider to set up the Nanobox infrastructure on')
+@click.option('verbosity', '-v', '--verbose', count=True,
+              help='Enable verbose output; multiple uses increase verbosity')
+@click.option('conf', '-c', '--config', default='nanobox.yml',
+              type=click.Path(dir_okay=False, resolve_path=True),
+              help='Select a configuration file to load customizations from')
+@click.option('dump', '-d', '--dump', is_flag=True,
+              help='Dump the effective configuration and exit')
+@click.version_option(None, '-V', '--version')
+@click.pass_context
+def cli(ctx, adapter, verbosity, conf, dump):
+    ctx.echo = lambda msg: click.echo(msg)
+    ctx.error = lambda msg: click.echo('ERROR: %s' % msg, err=True)
+    ctx.info = lambda msg:  click.echo('INFO:  %s' % msg, err=True)\
+        if verbosity > 0 else None
+    ctx.debug = lambda msg: click.echo('DEBUG: %s' % msg, err=True)\
+        if verbosity > 1 else None
+    ctx.trace = lambda msg: click.echo('TRACE: %s' % msg, err=True)\
+        if verbosity > 2 else None
+
+    # Gather configuration options
+    config = {
+        'environments': {
+            'production': {
+                'use_zones': True,
+                'application_zone': 'apz',
+            },
+            'staging': {
+                'use_zones': False,
+            },
+        },
+        'zones': {
+            'dmz': {
+                'components': [
+                    'vpn',
+                    'gateway',
+                    'waf',
+                ],
+                'networking': {
+                    'in': [
+                        'pub',
+                        'mgz',
+                        'apz',
+                    ],
+                    'out': [
+                        'pub',
+                        'mgz',
+                        'apz',
+                    ],
+                },
+            },
+            'mgz': {
+                'components': [
+                    'controller',
+                    # 'logger',
+                    # 'ci',
+                    # 'sci',
+                ],
+                'networking': {
+                    'in': [
+                        'dmz',
+                        'apz',
+                    ],
+                    'out': [
+                        'dmz',
+                        'apz',
+                        'sdz',
+                    ],
+                },
+            },
+            'apz': {
+                # 'components': [],
+                'networking': {
+                    'in': [
+                        'dmz',
+                        'mgz',
+                    ],
+                    'out': [
+                        'dmz',
+                        'mgz',
+                        'sdz',
+                    ],
+                },
+            },
+            'sdz': {
+                # 'components': [
+                #     # central data services go here;
+                #     # should there be any by default?
+                # ],
+                'networking': {
+                    'in': [
+                        'apz',
+                        'mgz',
+                    ],
+                    # 'out': [],
+                },
+            },
+        },
+    }
+
+    if os.path.exists(conf):
+        with open(conf) as f:
+            custom = yaml.safe_load(f)
+        if custom is None:
+            custom = {}
+    else:
+        custom = {}
+
+    dict_merge(config, custom)
+
+    for section in ['environments', 'zones']:
+        if 'skip' in config[section]:
+            for block in config[section]['skip']:
+                if block != 'skip' and block in config[section]:
+                    del config[section][block]
+            del config[section]['skip']
+
+    # Initialize adapter
+    adapters[adapter].get('init', lambda ctx: None)(ctx)
+
+    # PHASE ONE
+    for env, envInfo in config['environments'].items():
+        # Create environment
+        envMethod(adapter, 'setup')(ctx, env, envInfo)
+
+        if 'use_zones' in envInfo and envInfo['use_zones']:
+            # Setup zones
+            for zone, zoneInfo in config['zones'].items():
+                zoneMethod(adapter, 'setup')(ctx, env, zone, zoneInfo)
+
+            # Setup security concerns
+            # We need all zones to exist before we can do this, so it has to
+            # happen in a separate pass...
+            for zone, zoneInfo in config['zones'].items():
+                zoneMethod(adapter, 'security')(ctx, env, zone, zoneInfo)
+
+        else:
+            # Setup security concerns
+            envMethod(adapter, 'security')(ctx, env)
+
+        # Create access control
+        envMethod(adapter, 'acls')(ctx, env, envInfo)
+
+        # PHASE TWO
+        # Create controller
+        if 'use_zones' in envInfo and envInfo['use_zones']:
+            ctl_zone = [zone for zone in config['zones']
+                        if 'components' in config['zones'][zone]
+                        and 'controller' in
+                        config['zones'][zone]['components']][0]
+            controller = zoneMethod(adapter, 'controller')(ctx, env, ctl_zone)
+        else:
+            controller = envMethod(adapter, 'controller')(ctx, env)
+
+        # SSH into new controller and run `controller.sh` to set it up
+        # TODO
+
+        # PHASE FOUR
+        # Finalize configurations
+        # TODO
+
+        # Install remaining components
+        if 'use_zones' in envInfo and envInfo['use_zones']:
+            for zone, zoneInfo in config['zones'].items():
+                if 'components' in zoneInfo and \
+                        len(zoneInfo['components']) > 0 and \
+                        zoneInfo['components'] != ['controller']:
+                    # Setup components
+                    zoneMethod(adapter, 'components')(
+                        ctx, env, zone, zoneInfo)
+
+        # Test everything
+        # TODO
+
+        # LOCK IT DOWN
+        if 'use_zones' in envInfo and envInfo['use_zones']:
+            for zone, zoneInfo in config['zones'].items():
+                zoneMethod(adapter, 'lockdown')(ctx, env, zone, zoneInfo)
+
+    # Indicate success/failure
+    click.echo('%s (%d) %s' % (adapter, verbosity, conf), err=True)
+    if dump:
+        click.echo(yaml.safe_dump(config, default_flow_style=False))
+
+
+def envMethod(adapter, method):
+    return adapters[adapter].get(
+        'environment_%s' % method,
+        lambda ctx, env, info=None: None
+    )
+
+
+def zoneMethod(adapter, method):
+    return adapters[adapter].get(
+        'zone_%s' % method,
+        lambda ctx, env, zone, info=None: None
+    )
+
+
+def dict_merge(dct, merge_dct):
+    """ Recursive dict merge. Inspired by :meth:``dict.update()``, instead of
+    updating only top-level keys, dict_merge recurses down into dicts nested
+    to an arbitrary depth, updating keys. The ``merge_dct`` is merged into
+    ``dct``.
+
+    :param dct: dict onto which the merge is executed
+    :param merge_dct: dct merged into dct
+    :return: None
+    """
+    for k, v in merge_dct.items():
+        if (k in dct and isinstance(dct[k], dict)
+                and isinstance(merge_dct[k], collections.Mapping)):
+            dict_merge(dct[k], merge_dct[k])
+        else:
+            dct[k] = merge_dct[k]
