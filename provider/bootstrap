@@ -6,10 +6,10 @@ import os
 import yaml
 
 adapters = {}
-for fn in os.listdir(os.path.join(os.path.dirname(__file__), '../adapters')):
+for fn in os.listdir(os.path.join(os.path.dirname(__file__), 'adapters')):
     if fn.endswith('.py'):
         short = fn[:-3]
-        fn = os.path.join(os.path.dirname(__file__), '../adapters', fn)
+        fn = os.path.join(os.path.dirname(__file__), 'adapters', fn)
         with open(fn) as f:
             adapters[short] = {}
             code = compile(f.read(), fn, 'exec')
@@ -17,9 +17,10 @@ for fn in os.listdir(os.path.join(os.path.dirname(__file__), '../adapters')):
 
 
 @click.command(context_settings=dict(help_option_names=['-h', '--help']))
-@click.option('-p', '--adapter', type=click.Choice(adapters.keys()),
+@click.option('-a', '--adapter', type=click.Choice(adapters.keys()),
               prompt=True, envvar='NANOBOX_ADAPTER',
-              help='The adapter for the provider to set up the Nanobox infrastructure on')
+              help=('The adapter for the provider to set up the Nanobox '
+                    'infrastructure on'))
 @click.option('verbosity', '-v', '--verbose', count=True,
               help='Enable verbose output; multiple uses increase verbosity')
 @click.option('conf', '-c', '--config', default='nanobox.yml',
@@ -136,6 +137,10 @@ def cli(ctx, adapter, verbosity, conf, dump):
                     del config[section][block]
             del config[section]['skip']
 
+    if dump:
+        click.echo(yaml.safe_dump(config, default_flow_style=False))
+        exit()
+
     # Initialize adapter
     adapters[adapter].get('init', lambda ctx: None)(ctx)
 
@@ -200,8 +205,6 @@ def cli(ctx, adapter, verbosity, conf, dump):
 
     # Indicate success/failure
     click.echo('%s (%d) %s' % (adapter, verbosity, conf), err=True)
-    if dump:
-        click.echo(yaml.safe_dump(config, default_flow_style=False))
 
 
 def envMethod(adapter, method):
@@ -234,3 +237,6 @@ def dict_merge(dct, merge_dct):
             dict_merge(dct[k], merge_dct[k])
         else:
             dct[k] = merge_dct[k]
+
+if __name__ == '__main__':
+    cli()
