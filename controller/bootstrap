@@ -223,11 +223,6 @@ if [ ! -f /run/iptables ]; then
   iptables -t nat -A POSTROUTING -o ${INTERNAL_IFACE} -j MASQUERADE
 END
 
-if [ -n "${EXTERNAL_IFACE}" ]
-then
-  echo "  iptables -t nat -A POSTROUTING -o ${EXTERNAL_IFACE} -j MASQUERADE"
-fi
-
 cat <<END
   touch /run/iptables
 fi
@@ -266,12 +261,24 @@ WantedBy=multi-user.target
 END
 }
 
+prompt_user() {
+  variable=$1
+  while [ -z ${!variable} ]; do
+    read -p "Provide value for ${variable}: " ${variable}
+  done
+}
+
 create_env_file() {
+  for i in DEFAULT_USER DEFAULT_PASSWORD DOMAIN APP_DOMAIN UNITY_LICENSE; do
+    if [ -z ${!i} ]; then
+      prompt_user $i
+    fi
+  done
+  echo "Generating cryptographic keys, this will take some time"
   SECRET_KEY_BASE=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}')
   SHAMAN_TOKEN=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}')
   PROXY_TOKEN=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}')
-  DEFAULT_PASSWORD=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}' | xxd -r -p | base64 | cut -c1-12 )
-  cat <<END
+  cat <<END > /etc/nanobox/.env
 COMPOSE_PROJECT_NAME=unity
 DATA_QUEUE_HOST=queue
 DATA_DB_HOST=db
@@ -286,13 +293,13 @@ SHAMAN_TOKEN=${SHAMAN_TOKEN}
 PROXY_HOST=proxy
 PROXY_TOKEN=${PROXY_TOKEN}
 ADAPTER_URL=http://adapter:8080
-DEFAULT_USER=admin
+DEFAULT_USER=${DEFAULT_USER}
 DEFAULT_PASSWORD=${DEFAULT_PASSWORD}
 END
 }
 
 docker_compose_yml() {
-  cat <<'END'
+  cat <<'END' > /etc/nanobox/unity.yml
 version: '3.1'
 
 services:
@@ -302,7 +309,7 @@ services:
     volumes:
       - 'db_data:/var/lib/postgresql/data'
     env_file:
-      - '/etc/nanobox/environment'
+      - '/etc/nanobox/.env'
       
   # the sidekiq worker queue
   queue:
@@ -310,14 +317,14 @@ services:
     volumes:
       - 'queue_data:/data'
     env_file:
-      - '/etc/nanobox/environment'
+      - '/etc/nanobox/.env'
   
   # libcloud adapters
   adapter:
     image: 'nanobox/unity-adapter'
     command: gunicorn -c /app/etc/gunicorn.py nanobox_libcloud:app
     env_file:
-      - '/etc/nanobox/environment'
+      - '/etc/nanobox/.env'
       
   # shaman convenience dns for hosted apps
   dns:
@@ -330,7 +337,7 @@ services:
     expose:
       - "1632"
     env_file:
-      - '/etc/nanobox/environment'
+      - '/etc/nanobox/.env'
       
   # nginx proxy for this app
   router:
@@ -353,7 +360,7 @@ services:
       - dns
       - proxy
     env_file:
-      - '/etc/nanobox/environment'
+      - '/etc/nanobox/.env'
     environment:
       VIRTUAL_HOST: "dashboard.${DOMAIN},api.${DOMAIN}"
     
@@ -368,7 +375,7 @@ services:
       - dns
       - proxy
     env_file:
-      - '/etc/nanobox/environment'
+      - '/etc/nanobox/.env'
       
   # the dashboard proxy to end-run browser security issues
   proxy:
@@ -379,7 +386,7 @@ services:
     ports:
       - "8444:8444"
     env_file:
-      - '/etc/nanobox/environment'
+      - '/etc/nanobox/.env'
     environment:
       VIRTUAL_HOST: "proxy.${DOMAIN}"
     
@@ -392,6 +399,29 @@ volumes:
 END
 }
 
+configure_docker_compose() {
+  # create init script
+  if [[ "$(init_system)" = "systemd" ]]; then
+    echo "$(docker_compose_systemd_conf)" > /etc/systemd/system/docker-compose.service
+    systemctl enable docker-compose.service
+  elif [[ "$(init_system)" = "upstart" ]]; then
+    echo "$(docker_compose_upstart_conf)" > /etc/init/docker-compose.conf
+  fi
+}
+
+start_docker_compose() {
+  # ensure the docker-compose service is started
+  if [[ "$(init_system)" = "systemd" ]]; then
+    if [[ ! `service docker-compose status | grep "active (running)"` ]]; then
+      service docker-compose start
+    fi
+  elif [[ "$(init_system)" = "upstart" ]]; then
+    if [[ ! `service docker-compose status | grep start/running` ]]; then
+      service docker-compose start
+    fi
+  fi
+}
+
 docker_compose_upstart_conf() {
   cat <<'END'
 description "Nanobox docker-compose"
@@ -400,6 +430,7 @@ start on runlevel [2345]
 
 script
 
+chdir /etc/nanobox/
 docker-compose -f /etc/nanobox/unity.yml up
 
 end script
@@ -413,6 +444,7 @@ Description=Nanobox docker-compose
 
 [Service]
 RemainAfterExit=yes
+WorkingDirectory=/etc/nanobox
 ExecStart=docker-compose -f /etc/nanobox/unity.yml up
 
 [Install]
@@ -432,6 +464,28 @@ format() {
     echo "${prefix}${LINE}"
   done
 }
+
+for i in "${@}"; do
+
+  case $i in
+    default-user=* )
+      DEFAULT_USER=${i#*=}
+      ;;
+    default-password=* )
+      DEFAULT_PASSWORD=${i#*=}
+      ;;
+    unity-license=* )
+      UNITY_LICENSE=${i#*=}
+      ;;
+    domain=* )
+      DOMAIN=${i#*=}
+      ;;
+    app-domain=* )
+      APP_DOMAIN=${i#*=}
+      ;;
+  esac
+
+done
 
 let MTU=$(netstat -i | grep ${INTERNAL_IFACE} | awk '{print $2}')-50
 
