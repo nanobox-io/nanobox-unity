@@ -329,6 +329,7 @@ create_unity_env_file() {
   cat <<END
 COMPOSE_PROJECT_NAME=unity
 DATA_QUEUE_HOST=queue
+DATA_REDIS_HOST=queue
 DATA_DB_HOST=db
 DATA_DB_USER=postgres
 DOMAIN=${DOMAIN}
