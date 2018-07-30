@@ -454,8 +454,8 @@ END
 
 configure_unity() {
   [ -d /etc/nanobox ] || mkdir /etc/nanobox
-  echo $(create_unity_env_file) > /etc/nanobox/.env
-  echo $(unity_yml) > /etc/nanobox/unity.yml
+  echo "$(create_unity_env_file)" > /etc/nanobox/.env
+  echo "$(unity_yml)" > /etc/nanobox/unity.yml
   # create init script
   if [[ "$(init_system)" = "systemd" ]]; then
     echo "$(unity_systemd_conf)" > /etc/systemd/system/unity.service
@@ -499,9 +499,9 @@ unity_systemd_conf() {
 Description=Nanobox Unity
 
 [Service]
-RemainAfterExit=yes
 WorkingDirectory=/etc/nanobox
-ExecStart=docker-compose -f /etc/nanobox/unity.yml up
+ExecStart=/usr/bin/docker-compose -f /etc/nanobox/unity.yml up
+ExecStop=/usr/bin/docker-compose -f /etc/nanobox/unity.yml down
 
 [Install]
 WantedBy=multi-user.target
@@ -543,14 +543,10 @@ for i in "${@}"; do
 
 done
 
-let MTU=$(netstat -i | grep ${INTERNAL_IFACE} | awk '{print $2}')-50
-
 # silently fix hostname in ps1
 
-run ensure_variables_have_values "Checking for required data"
-run add_provider_credentials "Configuring providers"
-
-run generate_cryptograpic_keys "Generating cryptograpic keys"
+ensure_variables_have_values
+add_provider_credentials
 
 run configure_updates "Configuring automatic updates"
 
@@ -562,6 +558,8 @@ run start_modloader "Starting modloader"
 
 #run configure_firewall "Configuring firewall"
 #run start_firewall "Starting firewall"
+
+run generate_cryptograpic_keys "Generating cryptograpic keys"
 
 run configure_unity "Configuring Nanobox Unity"
 run start_unity "Starting Nanobox Unity"
