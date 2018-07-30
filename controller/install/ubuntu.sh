@@ -42,6 +42,19 @@ install_docker() {
   which rngd || ( wait_for_lock; apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -y install rng-tools )
   [ -f /usr/lib/apt/methods/https ] || ( wait_for_lock; apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -y install apt-transport-https )
 
+  if [ -f /etc/systemd/system/multi-user.target.wants/systemd-resolved.service ]; then
+    systemctl disable systemd-resolved
+    systemctl stop systemd-resolved
+    systemctl mask systemd-resolved
+    rm /etc/resolv.conf
+    ln -s /run/resolvconf/resolv.conf /etc/resolv.conf
+    cat > /etc/resolvconf/resolv.conf.d/base <<'END'
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+END
+    resolvconf -u
+  fi
+
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
   add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
   time ( wait_for_lock; apt-get -y update )
@@ -213,6 +226,9 @@ if [ ! -f /run/iptables ]; then
   # allow https connections from anywhere
   iptables -A INPUT -p tcp --dport 443 -j ACCEPT
 
+  # allow dns connections from anywhere
+  iptables -A INPUT -p udp --dport 53 -j ACCEPT
+
   # allow icmp packets
   iptables -A INPUT -p icmp -j ACCEPT
 
@@ -268,17 +284,22 @@ prompt_user() {
   done
 }
 
-create_env_file() {
+ensure_variables_have_values() {
   for i in DEFAULT_USER DEFAULT_PASSWORD DOMAIN APP_DOMAIN UNITY_LICENSE; do
     if [ -z ${!i} ]; then
       prompt_user $i
     fi
   done
-  echo "Generating cryptographic keys, this will take some time"
+}
+
+generate_cryptograpic_keys() {
   SECRET_KEY_BASE=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}')
   SHAMAN_TOKEN=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}')
   PROXY_TOKEN=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}')
-  cat <<END > /etc/nanobox/.env
+}
+
+create_unity_env_file() {
+  cat <<END
 COMPOSE_PROJECT_NAME=unity
 DATA_QUEUE_HOST=queue
 DATA_DB_HOST=db
@@ -298,8 +319,8 @@ DEFAULT_PASSWORD=${DEFAULT_PASSWORD}
 END
 }
 
-docker_compose_yml() {
-  cat <<'END' > /etc/nanobox/unity.yml
+unity_yml() {
+  cat <<'END'
 version: '3.1'
 
 services:
@@ -399,32 +420,35 @@ volumes:
 END
 }
 
-configure_docker_compose() {
+configure_unity() {
+  [ -d /etc/nanobox ] || mkdir /etc/nanobox
+  echo $(create_unity_env_file) > /etc/nanobox/.env
+  echo $(unity_yml) > /etc/nanobox/unity.yml
   # create init script
   if [[ "$(init_system)" = "systemd" ]]; then
-    echo "$(docker_compose_systemd_conf)" > /etc/systemd/system/docker-compose.service
-    systemctl enable docker-compose.service
+    echo "$(unity_systemd_conf)" > /etc/systemd/system/unity.service
+    systemctl enable unity.service
   elif [[ "$(init_system)" = "upstart" ]]; then
-    echo "$(docker_compose_upstart_conf)" > /etc/init/docker-compose.conf
+    echo "$(unity_upstart_conf)" > /etc/init/unity.conf
   fi
 }
 
-start_docker_compose() {
+start_unity() {
   # ensure the docker-compose service is started
   if [[ "$(init_system)" = "systemd" ]]; then
-    if [[ ! `service docker-compose status | grep "active (running)"` ]]; then
-      service docker-compose start
+    if [[ ! `service unity status | grep "active (running)"` ]]; then
+      service unity start
     fi
   elif [[ "$(init_system)" = "upstart" ]]; then
-    if [[ ! `service docker-compose status | grep start/running` ]]; then
-      service docker-compose start
+    if [[ ! `service unity status | grep start/running` ]]; then
+      service unity start
     fi
   fi
 }
 
-docker_compose_upstart_conf() {
+unity_upstart_conf() {
   cat <<'END'
-description "Nanobox docker-compose"
+description "Nanobox Unity"
 
 start on runlevel [2345]
 
@@ -437,10 +461,10 @@ end script
 END
 }
 
-docker_compose_systemd_conf() {
+unity_systemd_conf() {
   cat <<'END'
 [Unit]
-Description=Nanobox docker-compose
+Description=Nanobox Unity
 
 [Service]
 RemainAfterExit=yes
@@ -491,6 +515,10 @@ let MTU=$(netstat -i | grep ${INTERNAL_IFACE} | awk '{print $2}')-50
 
 # silently fix hostname in ps1
 
+run ensure_variables_have_values "Checking for required data"
+
+run generate_cryptograpic_keys "Generating cryptograpic keys"
+
 run configure_updates "Configuring automatic updates"
 
 run install_docker "Installing docker"
@@ -501,6 +529,9 @@ run start_modloader "Starting modloader"
 
 #run configure_firewall "Configuring firewall"
 #run start_firewall "Starting firewall"
+
+run configure_unity "Configuring Nanobox Unity"
+run start_unity "Starting Nanobox Unity"
 
 #run create_nanobox_environment "Creating environment for nanobox"
 #run docker_compose_nanobox "Starting nanobox services"
