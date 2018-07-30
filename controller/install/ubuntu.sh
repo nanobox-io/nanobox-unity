@@ -41,7 +41,7 @@ install_docker() {
   which gpg || ( wait_for_lock; apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -y install gnupg )
   which rngd || ( wait_for_lock; apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -y install rng-tools )
   [ -f /usr/lib/apt/methods/https ] || ( wait_for_lock; apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" -y install apt-transport-https )
-
+  # systemd-resolved interferes with running unity
   if [ -f /etc/systemd/system/multi-user.target.wants/systemd-resolved.service ]; then
     systemctl disable systemd-resolved
     systemctl stop systemd-resolved
@@ -284,6 +284,32 @@ prompt_user() {
   done
 }
 
+add_provider_credentials() {
+  local BACK=false
+
+  while [ $BACK = 'false' ]; do
+    cat <<END
+Provider configuration Options:
+aws: Configure AWS - EC2_KEY_ID and EC2_ACCESS_KEY
+back: Return to configuring server
+END
+    read -p "Which option [aws|back]: " option
+    case $option in
+      aws)
+        for i in EC2_KEY_ID EC2_ACCESS_KEY; do
+          prompt_user $i
+        done
+        ;;
+      back)
+        BACK=true
+        ;;
+      default)
+        ;;
+    esac
+  done
+}
+
+
 ensure_variables_have_values() {
   for i in DEFAULT_USER DEFAULT_PASSWORD DOMAIN APP_DOMAIN UNITY_LICENSE; do
     if [ -z ${!i} ]; then
@@ -317,6 +343,12 @@ ADAPTER_URL=http://adapter:8080
 DEFAULT_USER=${DEFAULT_USER}
 DEFAULT_PASSWORD=${DEFAULT_PASSWORD}
 END
+  if [ -n $EC2_KEY_ID ]; then
+    echo "EC2_KEY_ID=$EC2_KEY_ID"
+  fi
+  if [ -n $EC2_ACCESS_KEY ]; then
+    echo "EC2_ACCESS_KEY=$EC2_ACCESS_KEY"
+  fi
 }
 
 unity_yml() {
@@ -516,6 +548,7 @@ let MTU=$(netstat -i | grep ${INTERNAL_IFACE} | awk '{print $2}')-50
 # silently fix hostname in ps1
 
 run ensure_variables_have_values "Checking for required data"
+run add_provider_credentials "Configuring providers"
 
 run generate_cryptograpic_keys "Generating cryptograpic keys"
 
@@ -536,4 +569,4 @@ run start_unity "Starting Nanobox Unity"
 #run create_nanobox_environment "Creating environment for nanobox"
 #run docker_compose_nanobox "Starting nanobox services"
 
-echo "+> Hold on to your butts"
+echo "+> Nanobox now starting..."
