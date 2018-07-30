@@ -319,6 +319,7 @@ ensure_variables_have_values() {
 }
 
 generate_cryptograpic_keys() {
+  echo "Generating cryptograpic keys"
   SECRET_KEY_BASE=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}')
   SHAMAN_TOKEN=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}')
   PROXY_TOKEN=$(docker run --rm nanobox/unity-core nanobox keygen | grep KEY | awk '{print $2}')
@@ -465,6 +466,10 @@ configure_unity() {
   fi
 }
 
+setup_database() {
+  (cd /etc/nanobox; docker-compose -f /etc/nanobox/unity.yml run web nanobox migrate)
+}
+
 start_unity() {
   # ensure the docker-compose service is started
   if [[ "$(init_system)" = "systemd" ]]; then
@@ -499,6 +504,7 @@ unity_systemd_conf() {
 Description=Nanobox Unity
 
 [Service]
+EnvironmentFile=/etc/nanobox/.env
 WorkingDirectory=/etc/nanobox
 ExecStart=/usr/bin/docker-compose -f /etc/nanobox/unity.yml up
 ExecStop=/usr/bin/docker-compose -f /etc/nanobox/unity.yml down
@@ -559,8 +565,8 @@ run start_modloader "Starting modloader"
 #run configure_firewall "Configuring firewall"
 #run start_firewall "Starting firewall"
 
-run generate_cryptograpic_keys "Generating cryptograpic keys"
-
+generate_cryptograpic_keys
+run setup_database "Setting up Nanobox Database"
 run configure_unity "Configuring Nanobox Unity"
 run start_unity "Starting Nanobox Unity"
 
