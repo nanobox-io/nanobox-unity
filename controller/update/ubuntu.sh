@@ -17,9 +17,9 @@ cleanup() {
 
 trap cleanup EXIT
 
-
 download_upgrade() {
   # download file
+  echo "Downloading update script"
   curl -s https://s3.amazonaws.com/unity.nanobox.io/bootstrap/controller/ubuntu/upgrade > ${TMPFILE}
 }
 
@@ -35,8 +35,12 @@ checksum_file() {
 
 install_file() {
   # move into place if checksums match
+  echo "Verifying checksums"
   if [ "$(download_checksum)" = "$(checksum_file)" ]; then
-  	cp $TMPFILE /usr/bin/nanobox-upgrade
+    cp $TMPFILE /usr/bin/nanobox-upgrade
+    echo "Update complete"
+  else
+    echo "Error: Checksums didn't match"
   fi
 }
 
