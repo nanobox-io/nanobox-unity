@@ -309,7 +309,6 @@ END
   done
 }
 
-
 ensure_variables_have_values() {
   for i in DEFAULT_USER DEFAULT_PASSWORD DOMAIN APP_DOMAIN UNITY_LICENSE; do
     if [ -z ${!i} ]; then
@@ -444,13 +443,12 @@ services:
       - '/etc/nanobox/.env'
     environment:
       VIRTUAL_HOST: "proxy.${DOMAIN}"
-    
+
 volumes:
   db_data:
   queue_data:
   dns_data:
   proxy_data:
-
 END
 }
 
