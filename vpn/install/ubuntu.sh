@@ -166,7 +166,7 @@ generate_dh() {
 } 
 
 generate_server_certificate() {
-
+  [ -f /etc/openvpn/easy-rsa/keys/${KEY_NAME}.crt ] || (cd /etc/openvpn/easy-rsa; source vars; ./build-key-server $KEY_NAME )
 }
 
 configure_easy_rsa() {
