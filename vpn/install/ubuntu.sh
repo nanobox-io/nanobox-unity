@@ -40,8 +40,8 @@ install_packages() {
 }
 
 apt_update_upgrade() {
-  wait_for_lock; apt-get update
-  wait_for_lock; apt-get upgrade
+  wait_for_lock; apt-get -y update
+  wait_for_lock; apt-get -y upgrade
 }
 
 rsync_easy_rsa() {
