@@ -7,15 +7,16 @@ set -e
 
 set -o pipefail
 
-cleanup() {
-}
+# cleanup() {
+#   echo "cleanup"
+# }
 
-trap cleanup EXIT
+# trap cleanup EXIT
 
 # source current settings
 
-if [ -f /etc/openvpn/easy-rsa/var ]; then
-  . /etc/openvpn/easy-rsa/var
+if [ -f /etc/openvpn/easy-rsa/vars ]; then
+  . /etc/openvpn/easy-rsa/vars
 fi
 
 wait_for_lock() {
@@ -35,6 +36,7 @@ install_packages() {
   apt_install openvpn openvpn
   apt_install /usr/share/easy-rsa/build-ca easy-rsa
   apt_install rsync rsync
+  apt_install rngd rng-tools
 }
 
 apt_update_upgrade() {
@@ -64,6 +66,7 @@ ensure_variables_have_values() {
   prompt_user KEY_EMAIL "Enter the administrator email (e.g admin@nanobox.io): "
   prompt_user KEY_CN "Enter the common name (e.g unity.nanobox.io): "
   prompt_user KEY_NAME "Enter the name (e.g openvpn): "
+  prompt_user KEY_ALTNAMES "Enter the name (e.g vpn.unity.nanobox.io): "
   prompt_user KEY_OU "Enter the organizational unit (e.g web): "
 }
 
@@ -142,6 +145,7 @@ export KEY_EMAIL=${KEY_EMAIL}
 export KEY_OU=${KEY_OU}
 # X509 Subject Field
 export KEY_NAME=${KEY_NAME}
+export KEY_ALTNAMES=${KEY_ALTNAMES}
 
 # PKCS11 Smart Card
 # export PKCS11_MODULE_PATH="/usr/lib/changeme.so"
@@ -171,9 +175,14 @@ generate_server_certificate() {
 
 configure_easy_rsa() {
   ensure_variables_have_values
+  rsync_easy_rsa
   echo "$(easy_rsa_vars_file)" > /etc/openvpn/easy-rsa/vars
-
+  create_keys_dir
+  generate_ca
+  generate_dh
+  generate_server_certificate
 }
 
 apt_update_upgrade
 install_packages
+configure_easy_rsa
