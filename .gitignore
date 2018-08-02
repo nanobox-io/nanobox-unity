@@ -60,3 +60,4 @@ target/
 nanobox.yml
 
 .vagrant
+*.md5
